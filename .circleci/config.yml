@@ -1,196 +1,47 @@
+# Use the latest 2.1 version of CircleCI pipeline process engine.
+# See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
 
+# Orbs are reusable packages of CircleCI configuration that you may share across projects, enabling you to create encapsulated, parameterized commands, jobs, and executors that can be used across multiple projects.
+# See: https://circleci.com/docs/2.0/orb-intro/
 orbs:
-  python: circleci/python@<<pipeline.parameters.dev-orb-version>>
-  orb-tools: circleci/orb-tools@9.1
+  # The python orb contains a set of prepackaged CircleCI configuration you can use repeatedly in your configuration files
+  # Orb commands and jobs help you with common scripting around a language/tool
+  # so you dont have to copy and paste it everywhere.
+  # See the orb documentation here: https://circleci.com/developer/orbs/orb/circleci/python
+  python: circleci/python@1.2
 
-# Pipeline parameters
-parameters:
-  # These pipeline parameters are required by the "trigger-integration-tests-workflow"
-  # job, by default.
-  run-integration-tests:
-    type: boolean
-    default: false
-  dev-orb-version:
-    type: string
-    default: "dev:alpha"
-
+# Define a job to be invoked later in a workflow.
+# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
-  pip-install-test:
-    executor: python/default
+  build-and-test: # This is the name of the job, feel free to change it to better match what you're trying to do!
+    # These next lines defines a Docker executors: https://circleci.com/docs/2.0/executor-types/
+    # You can specify an image from Dockerhub or use one of the convenience images from CircleCI's Developer Hub
+    # A list of available CircleCI Docker convenience images are available here: https://circleci.com/developer/images/image/cimg/python
+    # The executor is the environment in which the steps below will be executed - below will use a python 3.8 container
+    # Change the version below to your required version of python
+    docker:
+      - image: cimg/python:3.8
+    # Checkout the code as the first step. This is a dedicated CircleCI step.
+    # The python orb's install-packages step will install the dependencies from a Pipfile via Pipenv by default.
+    # Here we're making sure we use just use the system-wide pip. By default it uses the project root's requirements.txt.
+    # Then run your tests!
+    # CircleCI will report the results back to your VCS provider.
     steps:
       - checkout
       - python/install-packages:
           pkg-manager: pip
-          app-dir: ~/project/sample_pip
+          # app-dir: ~/project/package-directory/  # If you're requirements.txt isn't in the root directory.
+          # pip-dependency-file: test-requirements.txt  # if you have a different name for your requirements file, maybe one that combines your runtime and test requirements.
       - run:
-          name: "Test"
-          working_directory: ~/project/sample_pip
-          command: |
-            pytest
+          name: Run tests
+          # This assumes pytest is installed via the install-package step above
+          command: pytest
 
-  pip-install-test-args:
-    executor: python/default
-    steps:
-      - checkout
-      - python/install-packages:
-          pkg-manager: pip
-          app-dir: ~/project/sample_pip
-          args: pytest
-          pip-dependency-file: ""
-      - run:
-          name: "Test"
-          working_directory: ~/project/sample_pip
-          command: |
-            pytest
-
-  dist-test:
-    executor: python/default
-    steps:
-      - checkout
-      - python/dist:
-          app-dir: ~/project/sample_pip
-
-
-  pipenv-test:
-    executor: python/default
-    steps:
-      - checkout
-      - python/install-packages:
-          app-dir: ~/project/sample_pipenv
-          cache-version: v2
-      - run:
-          working_directory: ~/project/sample_pipenv
-          command: |
-            cp Pipfile.lock Pipfile.lock.tmp
-            cp Pipfile Pipfile.tmp
-            pipenv run pytest --version
-          name: Ensure pipenv is working and copy lock file for cache testing
-      - run:
-          command: pipenv install pytest==4.6.1
-          working_directory: ~/project/sample_pipenv
-      - run:
-          working_directory: ~/project/sample_pipenv
-          command: |
-            cp Pipfile.lock.tmp Pipfile.lock
-            cp Pipfile.tmp Pipfile
-          name: Overwrite the lockfile with the one that should load the cache.
-      - python/install-packages:
-          app-dir: ~/project/sample_pipenv
-          cache-version: v2
-      - run:
-          command: pipenv run pytest
-          working_directory: ~/project/sample_pipenv
-
-  poetry-test:
-    executor: python/default
-    steps:
-      - checkout
-      - python/install-packages:
-          app-dir: ~/project/sample_poetry
-          pkg-manager: poetry
-      - run:
-          working_directory: ~/project/sample_poetry
-          command: |
-            poetry run pytest
-
+# Invoke jobs via workflows
+# See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
-  # This `lint-pack_validate_publish-dev` workflow will run on any commit.
-  lint_pack-validate_publish-dev:
-    unless: << pipeline.parameters.run-integration-tests >>
+  sample: # This is the name of the workflow, feel free to change it to better match your workflow.
+    # Inside the workflow, you define the jobs you want to run.
     jobs:
-      - orb-tools/lint
-      # pack your orb YAML files to a single orb.yml
-      # validate the orb.yml file to ensure it is well-formed
-      - orb-tools/pack:
-          requires:
-            - orb-tools/lint
-
-      - orb-tools/publish-dev:
-          orb-name: circleci/python
-          context: orb-publishing
-          requires:
-            - orb-tools/pack
-
-      # trigger an integration workflow to test the
-      # dev:${CIRCLE_SHA1:0:7} version of your orb
-      - orb-tools/trigger-integration-tests-workflow:
-          name: trigger-integration-dev
-          context: orb-publishing
-          requires:
-            - orb-tools/publish-dev
-
-  # This `integration-tests_prod-release` workflow will only run
-  # when the run-integration-tests pipeline parameter is set to true.
-  # It is meant to be triggered by the "trigger-integration-tests-workflow"
-  # job, and run tests on <your orb>@dev:${CIRCLE_SHA1:0:7}.
-  integration-tests_prod-release:
-    when: << pipeline.parameters.run-integration-tests >>
-    jobs:
-      - pip-install-test
-      - pip-install-test-args
-      - pipenv-test
-      - poetry-test
-      - dist-test
-      - python/test:
-          name: job-test-poetry
-          pkg-manager: poetry
-          test-tool: pytest
-          app-dir: ~/project/sample_poetry
-      - python/test:
-          name: job-test-pipenv
-          pkg-manager: pipenv
-          args: pytest
-          test-tool: pytest
-          app-dir: ~/project/sample_pipenv
-      - python/test:
-          name: job-test-pip
-          pkg-manager: pip
-          app-dir: ~/project/sample_pip
-      - python/test:
-          name: job-test-pip-no-reqs
-          pkg-manager: pip
-          pip-dependency-file: ""
-          app-dir: ~/project/sample_pip
-      - python/test:
-          version: 3.8.2
-          name: job-test-pip-dist
-          pkg-manager: pip-dist
-          app-dir: ~/project/sample_pip
-          pip-dependency-file: setup.py
-          post-steps:
-            - run:
-                name: Attempt to set the other python version - this should fail, but if the cache is broken, this will succeed.
-                command: |
-                  ! pyenv local 3.8.6
-            - run:
-                name: If another python version is loaded - its broken - this verifies that it's broken
-                when: on_fail
-                command: python --version
-      # publish a semver version of the orb. relies on
-      # the commit subject containing the text "[semver:patch|minor|major|skip]"
-      # as that will determine whether a patch, minor or major
-      # version will be published or if publishing should
-      # be skipped.
-      # e.g. [semver:patch] will cause a patch version to be published.
-      - orb-tools/dev-promote-prod-from-commit-subject:
-          orb-name: circleci/python
-          context: orb-publishing
-          add-pr-comment: true
-          fail-if-semver-not-indicated: true
-          publish-version-tag: true
-          bot-token-variable: GHI_TOKEN
-          bot-user: orb-publisher
-          ssh-fingerprints: a3:57:82:bf:38:55:a7:9b:69:7b:d0:79:8f:fa:61:01
-          requires:
-            - pip-install-test
-            - pip-install-test-args
-            - pipenv-test
-            - poetry-test
-            - job-test-poetry
-            - job-test-pipenv
-            - job-test-pip
-            - dist-test
-          filters:
-            branches:
-              only: master
+      - build-and-test
